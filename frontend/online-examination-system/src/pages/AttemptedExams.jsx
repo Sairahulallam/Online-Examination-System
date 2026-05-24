@@ -26,12 +26,14 @@ const AttemptedExams = ({ setUser }) => {
               <h5>{r.title}</h5>
               <p>Score: {r.score}</p>
 
-              <button
-                className="btn btn-secondary"
-                onClick={() => navigate(`/analysis/${r.exam_id}`)}
-              >
-                View Analysis
-              </button>
+             <button
+  className="btn btn-primary"
+  onClick={() =>
+    navigate(`/analysis/${r.exam_id}`)
+  }
+>
+  View Analytics
+</button>
             </div>
           ))
         )}

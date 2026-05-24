@@ -26,11 +26,10 @@ const Auth = ({ setUser }) => {
         });
       }
 
-      // 🔥 IMPORTANT: Store both token and user
-      localStorage.setItem("token", res.data.token);
-      localStorage.setItem("user", JSON.stringify(res.data));
+     localStorage.setItem("token", res.data.token);
+localStorage.setItem("user", JSON.stringify(res.data.user));
 
-      setUser(res.data);
+setUser(res.data.user);
 
     } catch (err) {
       setError(err.response?.data?.message || "Authentication failed");

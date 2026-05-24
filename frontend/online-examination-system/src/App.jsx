@@ -12,6 +12,7 @@ import StudentAnalysis from "./pages/StudentAnalysis";
 import StudentProfile from "./pages/StudentProfile";
 import ExamPage from "./pages/ExamPage";
 import ResultPage from "./pages/ResultPage";
+import AdminQAEvaluation from "./pages/AdminQAEvaluation";
 
 function App() {
   const [user, setUser] = useState(
@@ -30,6 +31,14 @@ function App() {
         <Routes>
           {user.role === "admin" ? (
             <>
+            <Route
+  path="/qa-evaluation"
+  element={
+    <AdminQAEvaluation
+      setUser={setUser}
+    />
+  }
+/>
               <Route path="/" element={<AdminDashboard setUser={setUser} />} />
               <Route path="/results" element={<AdminResults setUser={setUser} />} />
             </>

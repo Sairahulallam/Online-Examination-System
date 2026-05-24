@@ -133,7 +133,14 @@ const AdminDashboard = ({ setUser }) => {
             {exams.map(e => <option key={e.id} value={e.id}>{e.title}</option>)}
           </select>
         </div>
-
+        <button
+  className="btn btn-warning"
+  onClick={() =>
+    navigate("/qa-evaluation")
+  }
+>
+  QA Evaluation
+</button>
         {/* ADD QUESTION */}
         {examId && (
           <div className="card p-4">
