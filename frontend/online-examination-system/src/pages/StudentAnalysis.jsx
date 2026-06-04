@@ -52,11 +52,14 @@ const StudentAnalysis = () => {
   }
 
   const total = result.total_questions || 10;
-  const correct = result.score || 0;
+  const correct = result.evaluated
+  ? result.total_score
+  : result.score;
   const pendingQa = result.pending_qa || 0;
 
-const wrong =
-  total - correct - pendingQa;
+const wrong = result.evaluated
+  ? total - result.total_score
+  : total - result.score - pendingQa;
   const percentage = ((correct / total) * 100).toFixed(1);
 
   return (
@@ -72,10 +75,27 @@ const wrong =
 
             <div className="col-md-3">
               <div className="card p-3 text-center">
-                <h5>Score</h5>
+               <h5>
+  {result.evaluated
+    ? "Final Score"
+    : "MCQ Score"}
+</h5>
                 <h3>{correct} / {total}</h3>
               </div>
             </div>
+            {result.has_qa && (
+  <div className="col-md-3">
+    <div className="card p-3 text-center">
+      <h5>QA Score</h5>
+
+      <h3>
+        {result.evaluated
+          ? result.qa_score
+          : "Pending"}
+      </h3>
+    </div>
+  </div>
+)}
 
             <div className="col-md-3">
               <div className="card p-3 text-center">
@@ -90,7 +110,9 @@ const wrong =
       <h5>QA Review</h5>
 
       <h6 className="text-warning">
-        Pending Evaluation
+        {result.evaluated
+  ? "Evaluated"
+  : "Pending Evaluation"}
       </h6>
     </div>
   </div>
