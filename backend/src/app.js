@@ -11,10 +11,17 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
+import cors from "cors";
+
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://online-examination-system-six-taupe.vercel.app",
+    ],
+    credentials: true,
+  })
+);
 
 app.use(express.json());
 
