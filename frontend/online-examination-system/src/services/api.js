@@ -4,7 +4,6 @@ const API_URL =
   import.meta.env.VITE_API_URL ||
   "https://online-examination-system-m5tk.onrender.com/api";
 
-console.log("Using API:", API_URL);
 
 const API = axios.create({
   baseURL: API_URL,
