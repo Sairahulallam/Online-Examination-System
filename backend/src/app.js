@@ -14,10 +14,7 @@ const app = express();
 
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://online-examination-system-six-taupe.vercel.app",
-    ],
+    origin: true,
     credentials: true,
   })
 );
