@@ -41,11 +41,11 @@ const currentTime = new Date();
 const diffMinutes =
   (currentTime - startTime) / (1000 * 60);
 
-if (diffMinutes > duration) {
-  return res.status(400).json({
-    message: "Exam time exceeded",
-  });
-}
+return res.json({
+    duration,
+    diffMinutes,
+    comparison: diffMinutes > duration
+});
 
     // ================= GET QUESTIONS =================
     const questions = await pool.query(
