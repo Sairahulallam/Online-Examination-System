@@ -33,19 +33,20 @@ export const submitExam = async (req, res) => {
       });
     }
 
-    const duration = exam.rows[0].duration;
+    const duration = Number(exam.rows[0].duration);
 
-    const startTime = new Date(started_at);
-    const currentTime = new Date();
+const startTime = new Date(started_at);
+const currentTime = new Date();
 
-    const diffMinutes =
-      (currentTime - startTime) / (1000 * 60);
+const diffMinutes =
+  (currentTime - startTime) / (1000 * 60);
 
-    if (diffMinutes > duration) {
-      return res.status(400).json({
-        message: "Exam time exceeded",
-      });
-    }
+return res.status(400).json({
+  duration,
+  started_at,
+  currentTime,
+  diffMinutes,
+});
 
     // ================= GET QUESTIONS =================
     const questions = await pool.query(
@@ -151,41 +152,55 @@ export const getMyResults = async (req, res) => {
   try {
 
     const result = await pool.query(
-      `SELECT 
-          exams.id AS exam_id,
-          exams.title,
+  `SELECT
+      exams.id AS exam_id,
+      exams.title,
 
-          results.score,
-          results.qa_score,
-          results.total_score,
-          results.evaluated,
-          results.pending_qa,
+      results.score,
+      results.qa_score,
+      results.total_score,
+      results.evaluated,
+      results.pending_qa,
+      results.submitted_at,
 
-          results.submitted_at,
+      (
+        SELECT COUNT(*)
+        FROM questions
+        WHERE questions.exam_id = exams.id
+      ) AS total_questions,
 
-          (
-            SELECT COUNT(*)
-            FROM questions
-            WHERE questions.exam_id = exams.id
-          ) AS total_questions,
+      ROUND(
+        (
+          results.total_score::numeric /
+          NULLIF(
+            (
+              SELECT COUNT(*)
+              FROM questions
+              WHERE questions.exam_id = exams.id
+            ),
+            0
+          )
+        ) * 100,
+        2
+      ) AS percentage,
 
-          EXISTS (
-            SELECT 1
-            FROM questions
-            WHERE questions.exam_id = exams.id
-            AND questions.type = 'qa'
-          ) AS has_qa
+      EXISTS (
+        SELECT 1
+        FROM questions
+        WHERE questions.exam_id = exams.id
+        AND questions.type='qa'
+      ) AS has_qa
 
-       FROM results
+   FROM results
 
-       JOIN exams
-       ON results.exam_id = exams.id
+   JOIN exams
+   ON exams.id = results.exam_id
 
-       WHERE results.user_id = $1
+   WHERE results.user_id=$1
 
-       ORDER BY results.submitted_at DESC`,
-      [req.user.id]
-    );
+   ORDER BY results.submitted_at DESC`,
+  [req.user.id]
+);
 
     res.json(result.rows);
 
