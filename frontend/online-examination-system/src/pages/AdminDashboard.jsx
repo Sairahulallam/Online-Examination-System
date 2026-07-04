@@ -22,7 +22,12 @@ const AdminDashboard = ({ setUser }) => {
   const navigate = useNavigate();
   const [exams, setExams] = useState([]);
   const [examId, setExamId] = useState("");
-
+const [stats, setStats] = useState({
+  students: 0,
+  exams: 0,
+  attempts: 0,
+  avgScore: 0,
+});
   const [title, setTitle] = useState("");
   const [duration, setDuration] = useState("");
   const [examType, setExamType] = useState("mcq");
@@ -40,9 +45,13 @@ const AdminDashboard = ({ setUser }) => {
   };
 
   useEffect(() => {
-    fetchExams();
-  }, []);
+  fetchExams();
 
+  API.get("/exams/dashboard")
+    .then((res) => setStats(res.data))
+    .catch(console.error);
+
+}, []);
   const createExam = async () => {
     if (!title || !duration) return toast.error("Fill all fields");
 
@@ -91,6 +100,37 @@ const AdminDashboard = ({ setUser }) => {
         
         <div className="d-flex justify-content-between align-items-center mb-4">
           <h2>📊 Admin Dashboard</h2>
+          <div className="row mb-4">
+
+  <div className="col-md-3">
+    <div className="card shadow p-3 text-center">
+      <h6>Total Students</h6>
+      <h3>{stats.students}</h3>
+    </div>
+  </div>
+
+  <div className="col-md-3">
+    <div className="card shadow p-3 text-center">
+      <h6>Total Exams</h6>
+      <h3>{stats.exams}</h3>
+    </div>
+  </div>
+
+  <div className="col-md-3">
+    <div className="card shadow p-3 text-center">
+      <h6>Total Attempts</h6>
+      <h3>{stats.attempts}</h3>
+    </div>
+  </div>
+
+  <div className="col-md-3">
+    <div className="card shadow p-3 text-center">
+      <h6>Average Score</h6>
+      <h3>{stats.avgScore}</h3>
+    </div>
+  </div>
+
+</div>
           <button className="btn btn-dark" onClick={() => navigate("/results")}>
             View Results
           </button>

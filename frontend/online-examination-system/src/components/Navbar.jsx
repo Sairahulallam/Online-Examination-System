@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 
-const Navbar = ({ role, setUser }) => {
+const Navbar = ({ role, setUser = () => {} }) => {
   const navigate = useNavigate();
 
   const logout = () => {

@@ -9,9 +9,12 @@ const ExamPage = () => {
 
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [reviewQuestions, setReviewQuestions] = useState([]);
   const [timeLeft, setTimeLeft] = useState(null);
   const [totalTime, setTotalTime] = useState(null);
-  const [startedAt] = useState(new Date().toISOString());
+  const [startedAt, setStartedAt] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
 
   const timerRef = useRef(null);
@@ -21,7 +24,7 @@ const ExamPage = () => {
     const loadExam = async () => {
       const qRes = await API.get(`/questions/${examId}`);
       setQuestions(qRes.data);
-
+      setStartedAt(new Date().toISOString());
       const eRes = await API.get("/exams");
       const exam = eRes.data.find(e => e.id == examId);
 
@@ -41,24 +44,30 @@ const ExamPage = () => {
 
   // ================= TIMER =================
   useEffect(() => {
-    if (timeLeft === null) return;
+  if (timeLeft === null) return;
 
-    if (timeLeft === 60) {
-      toast("⚠ Only 1 minute remaining!");
-    }
+  if (timeLeft === 60) {
+    toast("⚠ Only 1 minute remaining!");
+  }
 
-    if (timeLeft <= 0) {
-      submitExam();
-      return;
-    }
+  if (timeLeft <= 0) {
+    clearTimeout(timerRef.current);
 
-    timerRef.current = setTimeout(() => {
-      setTimeLeft(prev => prev - 1);
-    }, 1000);
+    if (!isSubmitting) {
+    setIsSubmitting(true);
+    submitExam();
+  }
 
-    return () => clearTimeout(timerRef.current);
-  }, [timeLeft]);
 
+    return;
+  }
+
+  timerRef.current = setTimeout(() => {
+    setTimeLeft((prev) => prev - 1);
+  }, 1000);
+
+  return () => clearTimeout(timerRef.current);
+}, [timeLeft, isSubmitting]);
   // ================= AUTO SAVE =================
   useEffect(() => {
     localStorage.setItem(`exam_${examId}`, JSON.stringify(answers));
@@ -93,23 +102,35 @@ const ExamPage = () => {
 
   // ================= SUBMIT =================
   const submitExam = async () => {
-    clearTimeout(timerRef.current);
-    localStorage.removeItem(`exam_${examId}`);
 
-    try {
-      await API.post("/results/submit", {
-        exam_id: examId,
-        started_at: startedAt,
-        answers,
-      });
+  clearTimeout(timerRef.current);
+  localStorage.removeItem(`exam_${examId}`);
 
-      toast.success("Exam Submitted Successfully!");
-      navigate("/");
-    } catch (err) {
-      toast.error(err.response?.data?.message || "Submission failed");
-      navigate("/");
-    }
-  };
+  try {
+    console.log("Submitting Exam...");
+    await API.post("/results/submit", {
+      exam_id: Number(examId),
+      started_at: startedAt,
+      answers,
+    })
+    console.log("Submission Success");
+
+   toast.success("Exam Submitted Successfully!");
+
+setTimeout(() => {
+  navigate("/");
+}, 800);
+  } catch (err) {
+    console.log(err.response?.data);
+    console.error(err);
+
+    toast.error(
+      err.response?.data?.message || "Submission failed"
+    );
+
+    setIsSubmitting(false);
+  }
+};
 
   if (timeLeft === null) {
     return (
@@ -118,6 +139,17 @@ const ExamPage = () => {
       </div>
     );
   }
+
+  const q = questions[currentQuestion];
+
+  const toggleReview = () => {
+    if (!q) return;
+    if (reviewQuestions.includes(q.id)) {
+      setReviewQuestions(reviewQuestions.filter(id => id !== q.id));
+    } else {
+      setReviewQuestions([...reviewQuestions, q.id]);
+    }
+  };
 
   return (
     <div className="container mt-4">
@@ -141,14 +173,71 @@ const ExamPage = () => {
       <div className="progress mb-4">
         <div
           className="progress-bar bg-success"
-          style={{ width: `${(timeLeft / totalTime) * 100}%` }}
+          style={{
+            width: `${(timeLeft / totalTime) * 100}%`,
+            transition: "width 1s linear",
+          }}
         ></div>
       </div>
 
-      {/* QUESTIONS */}
-      {questions.map((q, index) => (
-        <div key={q.id} className="card p-4 mb-3">
-          <h5>Question {index + 1}</h5>
+      {/* EXAM HEADER */}
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h5>Online Examination</h5>
+
+        <span className="badge bg-primary fs-6">
+          Attempted: {Object.keys(answers).length}/{questions.length}
+        </span>
+      </div>
+
+      {/* LEGEND */}
+      <div className="mb-3">
+        <span className="badge bg-success me-2">Answered</span>
+        <span className="badge bg-warning me-2">Review</span>
+        <span className="badge bg-secondary">Not Answered</span>
+      </div>
+
+      {/* QUESTION NAVIGATOR */}
+      <div className="card p-3 mb-3">
+        <h5>Question Navigator</h5>
+        <div className="d-flex flex-wrap gap-2">
+          {questions.map((question, index) => (
+            <button
+              key={question.id}
+              className={`btn ${
+                reviewQuestions.includes(question.id)
+                  ? "btn-warning"
+                  : answers[question.id]
+                  ? "btn-success"
+                  : "btn-outline-secondary"
+              }`}
+              onClick={() => setCurrentQuestion(index)}
+            >
+              {index + 1}
+              {currentQuestion === index && " ★"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* CURRENT QUESTION */}
+      {q && (
+        <div className="card p-4">
+          <h5>
+            Question {currentQuestion + 1} of {questions.length}
+          </h5>
+
+          <div className="mb-3">
+            {reviewQuestions.includes(q.id) ? (
+              <span className="badge bg-warning text-dark">
+                Marked for Review
+              </span>
+            ) : answers[q.id] ? (
+              <span className="badge bg-success">Answered</span>
+            ) : (
+              <span className="badge bg-secondary">Not Answered</span>
+            )}
+          </div>
+
           <p>{q.question}</p>
 
           {q.type === "mcq" ? (
@@ -171,7 +260,7 @@ const ExamPage = () => {
           ) : (
             <textarea
               className="form-control"
-              rows="4"
+              rows="5"
               placeholder="Write your answer..."
               value={answers[q.id] || ""}
               onChange={(e) =>
@@ -179,8 +268,58 @@ const ExamPage = () => {
               }
             />
           )}
+
+          <button
+            className="btn btn-outline-danger mt-3"
+            onClick={() => {
+              const updated = { ...answers };
+              delete updated[q.id];
+              setAnswers(updated);
+            }}
+          >
+            Clear Response
+          </button>
         </div>
-      ))}
+      )}
+
+      {/* PREV / REVIEW / NEXT */}
+      <div className="d-flex justify-content-between mt-4">
+        <button
+          className="btn btn-secondary"
+          disabled={currentQuestion === 0}
+          onClick={() => setCurrentQuestion(currentQuestion - 1)}
+        >
+          Previous
+        </button>
+
+        <button
+          className="btn btn-warning"
+          onClick={toggleReview}
+        >
+          {q && reviewQuestions.includes(q.id)
+            ? "Remove Review"
+            : "Mark Review"}
+        </button>
+
+        <button
+          className="btn btn-primary"
+          disabled={currentQuestion === questions.length - 1}
+          onClick={() => setCurrentQuestion(currentQuestion + 1)}
+        >
+          Next
+        </button>
+      </div>
+
+      {/* SUMMARY */}
+      <div className="alert alert-info mt-4">
+        Answered :
+        <strong> {Object.keys(answers).length}</strong>
+        <br />
+        Remaining :
+        <strong>
+          {" "}{questions.length - Object.keys(answers).length}
+        </strong>
+      </div>
 
       {/* SUBMIT */}
       <button
@@ -194,7 +333,16 @@ const ExamPage = () => {
       {showConfirm && (
         <div className="modal-overlay">
           <div className="modal-box">
-            <h5>Are you sure you want to submit?</h5>
+            <h5>Submit Exam?</h5>
+            <p>
+              Answered :
+              <strong> {Object.keys(answers).length}</strong>
+              <br />
+              Remaining :
+              <strong>
+                {" "}{questions.length - Object.keys(answers).length}
+              </strong>
+            </p>
             <button
               className="btn btn-danger me-2"
               onClick={submitExam}
