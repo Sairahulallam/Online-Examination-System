@@ -1,14 +1,19 @@
 import pkg from "pg";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const { Pool } = pkg;
+
 const pool = new Pool({
-  user: "neondb_owner",
-  password: "npg_sqa6QmvzJwV0",
-  host: "ep-damp-scene-aoubm8g2.c-2.ap-southeast-1.aws.neon.tech",
-  database: "neondb",
-  port: 5432,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
+  port: Number(process.env.DB_PORT),
   ssl: {
     rejectUnauthorized: false,
   },
 });
+
 export default pool;
