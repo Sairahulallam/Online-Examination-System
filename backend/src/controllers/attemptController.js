@@ -250,3 +250,181 @@ export const getCurrentAttempt = async (req, res) => {
     });
   }
 };
+/* =========================
+   SAVE ANSWER
+========================= */
+export const saveAnswer = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const attemptId = Number(req.params.attemptId);
+    const questionId = Number(req.params.questionId);
+
+    const { answer } = req.body;
+
+    if (!Number.isInteger(attemptId) || !Number.isInteger(questionId)) {
+      return res.status(400).json({
+        message: "Invalid attempt or question ID",
+      });
+    }
+
+    // ================= GET ATTEMPT =================
+    const attemptResult = await pool.query(
+      `SELECT
+          id,
+          exam_id,
+          status,
+          expires_at
+       FROM attempts
+       WHERE id=$1
+         AND user_id=$2`,
+      [attemptId, userId]
+    );
+
+    if (attemptResult.rows.length === 0) {
+      return res.status(404).json({
+        message: "Attempt not found",
+      });
+    }
+
+    const attempt = attemptResult.rows[0];
+
+    // ================= CHECK STATUS =================
+    if (attempt.status !== "in_progress") {
+      return res.status(400).json({
+        message: "This exam attempt is no longer active",
+      });
+    }
+
+    // ================= CHECK EXPIRY =================
+    if (new Date(attempt.expires_at) <= new Date()) {
+      await pool.query(
+        `UPDATE attempts
+         SET
+           status='expired',
+           submission_type='expired',
+           submitted_at=NOW()
+         WHERE id=$1
+           AND status='in_progress'`,
+        [attemptId]
+      );
+
+      return res.status(410).json({
+        message: "Exam time has expired",
+      });
+    }
+
+    // ================= VERIFY QUESTION =================
+    const questionResult = await pool.query(
+      `SELECT id
+       FROM questions
+       WHERE id=$1
+         AND exam_id=$2`,
+      [questionId, attempt.exam_id]
+    );
+
+    if (questionResult.rows.length === 0) {
+      return res.status(400).json({
+        message: "Question does not belong to this exam",
+      });
+    }
+
+    // ================= SAVE / UPDATE ANSWER =================
+    await pool.query(
+      `INSERT INTO attempt_answers (
+          attempt_id,
+          question_id,
+          answer,
+          saved_at
+       )
+       VALUES ($1,$2,$3,NOW())
+
+       ON CONFLICT (attempt_id, question_id)
+       DO UPDATE SET
+          answer=EXCLUDED.answer,
+          saved_at=NOW()`,
+      [
+        attemptId,
+        questionId,
+        answer ?? "",
+      ]
+    );
+
+    // ================= UPDATE LAST SAVED =================
+    await pool.query(
+      `UPDATE attempts
+       SET last_saved_at=NOW()
+       WHERE id=$1`,
+      [attemptId]
+    );
+
+    return res.json({
+      message: "Answer saved successfully",
+    });
+  } catch (error) {
+    console.error("Save answer error:", error);
+
+    return res.status(500).json({
+      message: "Server error while saving answer",
+    });
+  }
+};
+
+
+/* =========================
+   GET ATTEMPT ANSWERS
+========================= */
+export const getAttemptAnswers = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const attemptId = Number(req.params.attemptId);
+
+    if (!Number.isInteger(attemptId)) {
+      return res.status(400).json({
+        message: "Invalid attempt ID",
+      });
+    }
+
+    // ================= VERIFY ATTEMPT =================
+    const attemptResult = await pool.query(
+      `SELECT id
+       FROM attempts
+       WHERE id=$1
+         AND user_id=$2`,
+      [attemptId, userId]
+    );
+
+    if (attemptResult.rows.length === 0) {
+      return res.status(404).json({
+        message: "Attempt not found",
+      });
+    }
+
+    // ================= GET ANSWERS =================
+    const result = await pool.query(
+      `SELECT
+          question_id,
+          answer,
+          saved_at
+       FROM attempt_answers
+       WHERE attempt_id=$1
+       ORDER BY question_id`,
+      [attemptId]
+    );
+
+    const answers = {};
+
+    result.rows.forEach((row) => {
+      answers[row.question_id] = row.answer;
+    });
+
+    return res.json({
+      answers,
+    });
+  } catch (error) {
+    console.error("Get attempt answers error:", error);
+
+    return res.status(500).json({
+      message: "Server error while fetching answers",
+    });
+  }
+};

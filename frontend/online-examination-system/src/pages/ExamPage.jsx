@@ -14,31 +14,91 @@ const ExamPage = () => {
   const [reviewQuestions, setReviewQuestions] = useState([]);
   const [timeLeft, setTimeLeft] = useState(null);
   const [totalTime, setTotalTime] = useState(null);
-  const [startedAt, setStartedAt] = useState("");
-  const [showConfirm, setShowConfirm] = useState(false);
+const [attemptId, setAttemptId] = useState(null);
+const [startedAt, setStartedAt] = useState("");
+const [expiresAt, setExpiresAt] = useState("");
+const [showConfirm, setShowConfirm] = useState(false);
 
   const timerRef = useRef(null);
 
   // ================= LOAD EXAM =================
   useEffect(() => {
-    const loadExam = async () => {
-      const qRes = await API.get(`/questions/${examId}`);
-      setQuestions(qRes.data);
-      setStartedAt(new Date().toISOString());
-      const eRes = await API.get("/exams");
-      const exam = eRes.data.find(e => e.id == examId);
+   const loadExam = async () => {
+  try {
+    // ================= GET QUESTIONS =================
+    const qRes = await API.get(`/questions/${examId}`);
 
-      const seconds = exam.duration * 60;
-      setTimeLeft(seconds);
-      setTotalTime(seconds);
+    setQuestions(qRes.data);
 
-      // Load saved answers
-      const saved = localStorage.getItem(`exam_${examId}`);
+    // ================= START / RESUME ATTEMPT =================
+    const attemptRes = await API.post("/attempts/start", {
+      exam_id: Number(examId),
+    });
+
+    const attempt = attemptRes.data.attempt;
+
+    setAttemptId(attempt.id);
+    setStartedAt(attempt.started_at);
+    setExpiresAt(attempt.expires_at);
+
+    // ================= SERVER TIMER =================
+    const expires = new Date(attempt.expires_at);
+    const now = new Date();
+
+    const remainingSeconds = Math.max(
+      0,
+      Math.floor((expires - now) / 1000)
+    );
+
+    setTimeLeft(remainingSeconds);
+
+    // ================= TOTAL TIME =================
+    const eRes = await API.get("/exams");
+
+    const exam = eRes.data.find(
+      (e) => e.id == examId
+    );
+
+    if (!exam) {
+      toast.error("Exam not found");
+      return;
+    }
+
+    const totalSeconds = Number(exam.duration) * 60;
+
+    setTotalTime(totalSeconds);
+
+    // ================= GET SERVER ANSWERS =================
+    try {
+      const answerRes = await API.get(
+        `/attempts/${attempt.id}/answers`
+      );
+
+      setAnswers(answerRes.data.answers || {});
+    } catch (error) {
+      console.error(
+        "Could not load server answers:",
+        error
+      );
+
+      // LocalStorage fallback
+      const saved = localStorage.getItem(
+        `exam_${examId}`
+      );
+
       if (saved) {
         setAnswers(JSON.parse(saved));
       }
-    };
+    }
+  } catch (error) {
+    console.error("Error loading exam:", error);
 
+    toast.error(
+      error.response?.data?.message ||
+      "Unable to load exam"
+    );
+  }
+};
     loadExam();
   }, [examId]);
 
@@ -248,9 +308,30 @@ setTimeout(() => {
                   className="form-check-input"
                   name={q.id}
                   checked={answers[q.id] === opt}
-                  onChange={() =>
-                    setAnswers({ ...answers, [q.id]: opt })
-                  }
+                  onChange={async () => {
+  const updatedAnswers = {
+    ...answers,
+    [q.id]: opt,
+  };
+
+  setAnswers(updatedAnswers);
+
+  if (attemptId) {
+    try {
+      await API.put(
+        `/attempts/${attemptId}/answers/${q.id}`,
+        {
+          answer: opt,
+        }
+      );
+    } catch (error) {
+      console.error(
+        "Failed to save answer:",
+        error
+      );
+    }
+  }
+}}
                 />
                 <label className="form-check-label">
                   {q[`option_${opt.toLowerCase()}`]}
@@ -263,19 +344,60 @@ setTimeout(() => {
               rows="5"
               placeholder="Write your answer..."
               value={answers[q.id] || ""}
-              onChange={(e) =>
-                setAnswers({ ...answers, [q.id]: e.target.value })
-              }
+              onChange={async (e) => {
+  const value = e.target.value;
+
+  const updatedAnswers = {
+    ...answers,
+    [q.id]: value,
+  };
+
+  setAnswers(updatedAnswers);
+
+  if (attemptId) {
+    try {
+      await API.put(
+        `/attempts/${attemptId}/answers/${q.id}`,
+        {
+          answer: value,
+        }
+      );
+    } catch (error) {
+      console.error(
+        "Failed to save answer:",
+        error
+      );
+    }
+  }
+}}
             />
           )}
 
           <button
             className="btn btn-outline-danger mt-3"
-            onClick={() => {
-              const updated = { ...answers };
-              delete updated[q.id];
-              setAnswers(updated);
-            }}
+           onClick={async () => {
+  const updated = { ...answers };
+
+  delete updated[q.id];
+
+  setAnswers(updated);
+
+  if (attemptId) {
+    try {
+      await API.put(
+        `/attempts/${attemptId}/answers/${q.id}`,
+        {
+          answer: "",
+        }
+      );
+    } catch (error) {
+      console.error(
+        "Failed to clear answer:",
+        error
+      );
+    }
+  }
+}}
           >
             Clear Response
           </button>
