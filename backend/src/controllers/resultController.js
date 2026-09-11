@@ -1,147 +1,5 @@
 import pool from "../config/db.js";
 
-/* =========================
-   SUBMIT EXAM
-========================= */
-export const submitExam = async (req, res) => {
-  try {
-    const { exam_id, answers, started_at } = req.body;
-
-    const userId = req.user.id;
-
-    // ================= PREVENT REATTEMPT =================
-    const attemptCheck = await pool.query(
-      "SELECT * FROM results WHERE user_id=$1 AND exam_id=$2",
-      [userId, exam_id]
-    );
-
-    if (attemptCheck.rows.length > 0) {
-      return res.status(400).json({
-        message: "Exam already attempted",
-      });
-    }
-
-    // ================= VALIDATE EXAM =================
-    const exam = await pool.query(
-      "SELECT duration FROM exams WHERE id=$1",
-      [exam_id]
-    );
-
-    if (exam.rows.length === 0) {
-      return res.status(404).json({
-        message: "Exam not found",
-      });
-    }
-
-    const duration = Number(exam.rows[0].duration);
-
-const startTime = new Date(started_at);
-const currentTime = new Date();
-
-const diffMinutes =
-  (currentTime - startTime) / (1000 * 60);
-
-return res.json({
-    duration,
-    diffMinutes,
-    comparison: diffMinutes > duration
-});
-
-    // ================= GET QUESTIONS =================
-    const questions = await pool.query(
-      `SELECT 
-          id,
-          type,
-          correct_option
-       FROM questions
-       WHERE exam_id=$1`,
-      [exam_id]
-    );
-
-    // ================= MCQ EVALUATION =================
-    let correctMcq = 0;
-    let pendingQa = 0;
-
-    questions.rows.forEach((q) => {
-
-      // MCQ auto evaluation
-      if (q.type === "mcq") {
-
-        if (
-          answers[q.id] === q.correct_option
-        ) {
-          correctMcq++;
-        }
-      }
-
-      // QA pending evaluation
-      if (q.type === "qa") {
-        pendingQa++;
-      }
-    });
-
-    // ================= INSERT RESULT =================
-    const resultInsert = await pool.query(
-      `INSERT INTO results (
-          user_id,
-          exam_id,
-          score,
-          pending_qa,
-          total_score
-       )
-       VALUES ($1,$2,$3,$4,$5)
-       RETURNING id`,
-
-      [
-        userId,
-        exam_id,
-        correctMcq,
-        pendingQa,
-        correctMcq,
-      ]
-    );
-
-    const resultId =
-      resultInsert.rows[0].id;
-
-    // ================= STORE QA ANSWERS =================
-    for (const q of questions.rows) {
-
-      if (q.type === "qa") {
-
-        await pool.query(
-          `INSERT INTO qa_answers (
-              result_id,
-              question_id,
-              answer
-           )
-           VALUES ($1,$2,$3)`,
-
-          [
-            resultId,
-            q.id,
-            answers[q.id] || "",
-          ]
-        );
-      }
-    }
-
-    // ================= RESPONSE =================
-    res.json({
-      message: "Exam submitted successfully",
-      score: correctMcq,
-      total: questions.rows.length,
-    });
-
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      message:
-        "Server error while submitting exam",
-    });
-  }
-};
 
 
 /* =========================
@@ -149,117 +7,127 @@ return res.json({
 ========================= */
 export const getMyResults = async (req, res) => {
   try {
-
     const result = await pool.query(
-  `SELECT
-      results.id AS result_id,
-      results.attempt_id,
-      exams.id AS exam_id,
-      exams.title,
+      `SELECT
+          results.id AS result_id,
+          results.attempt_id,
 
-      results.score,
-      results.qa_score,
-      results.total_score,
-      results.evaluated,
-      results.pending_qa,
-      results.submitted_at,
+          exams.id AS exam_id,
+          exams.title,
 
-      (
-        SELECT COUNT(*)
-        FROM questions
-        WHERE questions.exam_id = exams.id
-      ) AS total_questions,
+          results.score,
+          results.qa_score,
+          results.negative_score,
+          results.total_score,
 
-      ROUND(
-        (
-          results.total_score::numeric /
-          NULLIF(
-            (
-              SELECT COUNT(*)
-              FROM questions
-              WHERE questions.exam_id = exams.id
-            ),
-            0
-          )
-        ) * 100,
-        2
-      ) AS percentage,
+          results.total_possible_marks,
 
-      EXISTS (
-        SELECT 1
-        FROM questions
-        WHERE questions.exam_id = exams.id
-        AND questions.type='qa'
-      ) AS has_qa
+          results.correct_count,
+          results.wrong_count,
+          results.unanswered_count,
 
-   FROM results
+          results.percentage,
+          results.result_status,
 
-   JOIN exams
-   ON exams.id = results.exam_id
+          results.pending_qa,
+          results.evaluated,
 
-   WHERE results.user_id=$1
+          results.time_taken_seconds,
+          results.submitted_at,
 
-   ORDER BY results.submitted_at DESC`,
-  [req.user.id]
-);
+          attempts.attempt_number,
+          attempts.submission_type
 
-    res.json(result.rows);
+       FROM results
+
+       JOIN exams
+         ON exams.id = results.exam_id
+
+       LEFT JOIN attempts
+         ON attempts.id = results.attempt_id
+
+       WHERE results.user_id=$1
+
+       ORDER BY results.submitted_at DESC`,
+      [req.user.id]
+    );
+
+    return res.json(result.rows);
 
   } catch (error) {
-    console.error(error);
+    console.error("Get my results error:", error);
 
-    res.status(500).json({
-      message:
-        "Server error fetching results",
+    return res.status(500).json({
+      message: "Server error fetching results",
     });
   }
 };
-
 
 /* =========================
    GET ALL RESULTS (ADMIN)
 ========================= */
 export const getAllResults = async (req, res) => {
   try {
-
     if (req.user.role !== "admin") {
       return res.status(403).json({
         message: "Admin only",
       });
     }
 
-    const result = await pool.query(`
-      SELECT 
-        results.id,
-        results.attempt_id,
-        users.name AS student_name,
+    const result = await pool.query(
+      `SELECT
+          results.id AS result_id,
+          results.attempt_id,
 
-        exams.title AS exam_title,
+          users.name AS student_name,
 
-        results.score,
-        results.qa_score,
-        results.total_score,
-        results.evaluated,
+          exams.id AS exam_id,
+          exams.title AS exam_title,
 
-        results.submitted_at
+          results.score,
+          results.qa_score,
+          results.negative_score,
+          results.total_score,
 
-      FROM results
+          results.total_possible_marks,
 
-      JOIN users
-      ON results.user_id = users.id
+          results.correct_count,
+          results.wrong_count,
+          results.unanswered_count,
 
-      JOIN exams
-      ON results.exam_id = exams.id
+          results.percentage,
+          results.result_status,
 
-      ORDER BY results.submitted_at DESC
-    `);
+          results.pending_qa,
+          results.evaluated,
 
-    res.json(result.rows);
+          results.time_taken_seconds,
 
-  } catch (err) {
-    console.error(err);
+          attempts.attempt_number,
+          attempts.submission_type,
 
-    res.status(500).json({
+          results.submitted_at
+
+       FROM results
+
+       JOIN users
+         ON results.user_id = users.id
+
+       JOIN exams
+         ON results.exam_id = exams.id
+
+       LEFT JOIN attempts
+         ON attempts.id = results.attempt_id
+
+       ORDER BY results.submitted_at DESC`
+    );
+
+    return res.json(result.rows);
+
+  } catch (error) {
+    console.error("Get all results error:", error);
+
+    return res.status(500).json({
       message: "Server error",
     });
   }
@@ -270,153 +138,281 @@ export const getAllResults = async (req, res) => {
    GET PENDING QA
 ========================= */
 export const getPendingQA = async (req, res) => {
-
   try {
-
     if (req.user.role !== "admin") {
       return res.status(403).json({
         message: "Admin only",
       });
     }
 
-    const result = await pool.query(`
-      SELECT
-        qa_answers.id,
+    const result = await pool.query(
+      `SELECT
+          qa_answers.id,
+          qa_answers.result_id,
+          qa_answers.question_id,
 
-        qa_answers.answer,
-        qa_answers.marks,
+          qa_answers.answer,
+          qa_answers.marks,
 
-        users.name AS student_name,
+          users.name AS student_name,
 
-        exams.title AS exam_title,
+          exams.title AS exam_title,
 
-        questions.question
+          questions.question,
+          questions.marks AS max_marks
 
-      FROM qa_answers
+       FROM qa_answers
 
-      JOIN results
-      ON qa_answers.result_id = results.id
+       JOIN results
+         ON qa_answers.result_id = results.id
 
-      JOIN users
-      ON results.user_id = users.id
+       JOIN users
+         ON results.user_id = users.id
 
-      JOIN exams
-      ON results.exam_id = exams.id
+       JOIN exams
+         ON results.exam_id = exams.id
 
-      JOIN questions
-      ON qa_answers.question_id = questions.id
+       JOIN questions
+         ON qa_answers.question_id = questions.id
 
-      ORDER BY qa_answers.id DESC
-    `);
+       WHERE qa_answers.marks IS NULL
 
-    res.json(result.rows);
+       ORDER BY qa_answers.id DESC`
+    );
+
+    return res.json(result.rows);
 
   } catch (error) {
-    console.error(error);
+    console.error("Get pending QA error:", error);
 
-    res.status(500).json({
-      message:
-        "Server error fetching QA answers",
+    return res.status(500).json({
+      message: "Server error fetching QA answers",
     });
   }
 };
-
-
 /* =========================
    EVALUATE QA
 ========================= */
 export const evaluateQA = async (req, res) => {
+  const client = await pool.connect();
 
   try {
-
     if (req.user.role !== "admin") {
       return res.status(403).json({
         message: "Admin only",
       });
     }
 
-    const { marks } = req.body;
+    const qaId = Number(req.params.id);
+    const marks = Number(req.body.marks);
 
-    const qaId = req.params.id;
+    if (!Number.isInteger(qaId)) {
+      return res.status(400).json({
+        message: "Invalid QA answer ID",
+      });
+    }
 
-    // ================= UPDATE QA MARKS =================
-    await pool.query(
-      `UPDATE qa_answers
-       SET marks=$1
-       WHERE id=$2`,
+    if (!Number.isFinite(marks) || marks < 0) {
+      return res.status(400).json({
+        message: "Marks must be a valid non-negative number",
+      });
+    }
 
-      [marks, qaId]
-    );
+    await client.query("BEGIN");
 
-    // ================= GET RESULT ID =================
-    const qa = await pool.query(
-      `SELECT result_id
+    // ================= GET QA =================
+    const qaResult = await client.query(
+      `SELECT
+          qa_answers.id,
+          qa_answers.result_id,
+          qa_answers.question_id,
+          questions.marks AS max_marks
+
        FROM qa_answers
-       WHERE id=$1`,
 
+       JOIN questions
+         ON questions.id = qa_answers.question_id
+
+       WHERE qa_answers.id=$1
+
+       FOR UPDATE`,
       [qaId]
     );
 
-    const resultId =
-      qa.rows[0].result_id;
+    if (qaResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        message: "QA answer not found",
+      });
+    }
+
+    const qa = qaResult.rows[0];
+
+    // ================= VALIDATE MAX MARKS =================
+    const maxMarks = Number(qa.max_marks);
+
+    if (marks > maxMarks) {
+      await client.query("ROLLBACK");
+
+      return res.status(400).json({
+        message: `Marks cannot exceed ${maxMarks}`,
+      });
+    }
+
+    // ================= UPDATE QA MARKS =================
+    await client.query(
+      `UPDATE qa_answers
+       SET marks=$1
+       WHERE id=$2`,
+      [marks, qaId]
+    );
+
+    // ================= GET RESULT =================
+    const resultData = await client.query(
+      `SELECT
+          id,
+          exam_id,
+          score,
+          negative_score,
+          total_possible_marks
+       FROM results
+       WHERE id=$1
+       FOR UPDATE`,
+      [qa.result_id]
+    );
+
+    if (resultData.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        message: "Result not found",
+      });
+    }
+
+    const result = resultData.rows[0];
 
     // ================= CALCULATE QA TOTAL =================
-    const qaTotal = await pool.query(
-      `SELECT 
-          COALESCE(SUM(marks),0)
-          AS total
-
+    const qaTotalResult = await client.query(
+      `SELECT
+          COALESCE(SUM(marks), 0) AS total,
+          COUNT(*) AS total_questions,
+          COUNT(marks) AS evaluated_questions
        FROM qa_answers
-
        WHERE result_id=$1`,
-
-      [resultId]
+      [qa.result_id]
     );
-
-    // ================= GET MCQ SCORE =================
-    const result = await pool.query(
-      `SELECT score
-       FROM results
-       WHERE id=$1`,
-
-      [resultId]
-    );
-
-    const mcqScore =
-      result.rows[0].score;
 
     const qaScore =
-      Number(qaTotal.rows[0].total);
+      Number(qaTotalResult.rows[0].total);
 
+    const totalQaQuestions =
+      Number(qaTotalResult.rows[0].total_questions);
+
+    const evaluatedQaQuestions =
+      Number(qaTotalResult.rows[0].evaluated_questions);
+
+    const pendingQa =
+      totalQaQuestions - evaluatedQaQuestions;
+
+    // ================= MCQ SCORE =================
+    const mcqScore =
+      Number(result.score);
+
+    // ================= FINAL SCORE =================
     const finalScore =
       mcqScore + qaScore;
 
-    // ================= UPDATE FINAL RESULT =================
-    await pool.query(
+    // ================= RESULT STATUS =================
+    let percentage = null;
+    let resultStatus = "pending";
+    let evaluated = false;
+
+    if (pendingQa === 0) {
+      const totalPossibleMarks =
+        Number(result.total_possible_marks);
+
+      percentage =
+        totalPossibleMarks > 0
+          ? Number(
+              (
+                (finalScore / totalPossibleMarks) *
+                100
+              ).toFixed(2)
+            )
+          : 0;
+
+      // ================= GET PASSING MARKS =================
+      const examResult = await client.query(
+        `SELECT passing_marks
+         FROM exams
+         WHERE id=$1`,
+        [result.exam_id]
+      );
+
+      const passingMarks =
+        Number(
+          examResult.rows[0]?.passing_marks ?? 0
+        );
+
+      resultStatus =
+        finalScore >= passingMarks
+          ? "passed"
+          : "failed";
+
+      evaluated = true;
+    }
+
+    // ================= UPDATE RESULT =================
+    await client.query(
       `UPDATE results
        SET
          qa_score=$1,
          total_score=$2,
-         evaluated=true
-       WHERE id=$3`,
-
+         pending_qa=$3,
+         percentage=$4,
+         result_status=$5,
+         evaluated=$6
+       WHERE id=$7`,
       [
         qaScore,
         finalScore,
-        resultId,
+        pendingQa,
+        percentage,
+        resultStatus,
+        evaluated,
+        qa.result_id,
       ]
     );
 
-    res.json({
-      message: "QA Evaluated Successfully",
+    await client.query("COMMIT");
+
+    return res.json({
+      message: "QA evaluated successfully",
+
+      result: {
+        result_id: qa.result_id,
+        qa_score: qaScore,
+        total_score: finalScore,
+        pending_qa: pendingQa,
+        percentage,
+        result_status: resultStatus,
+        evaluated,
+      },
     });
 
   } catch (error) {
-    console.error(error);
+    await client.query("ROLLBACK");
 
-    res.status(500).json({
-      message:
-        "Server error while evaluating QA",
+    console.error(
+      "Evaluate QA error:",
+      error
+    );
+
+    return res.status(500).json({
+      message: "Server error while evaluating QA",
     });
+  } finally {
+    client.release();
   }
 };

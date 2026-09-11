@@ -438,7 +438,7 @@ export const submitAttempt = async (req, res) => {
     const userId = req.user.id;
     const attemptId = Number(req.params.attemptId);
 
-    const submissionType =
+    const requestedSubmissionType =
       req.body.submission_type === "auto"
         ? "auto"
         : "manual";
@@ -451,7 +451,7 @@ export const submitAttempt = async (req, res) => {
 
     await client.query("BEGIN");
 
-    // ================= GET ATTEMPT =================
+    // ================= GET + LOCK ATTEMPT =================
     const attemptResult = await client.query(
       `SELECT
           id,
@@ -492,12 +492,23 @@ export const submitAttempt = async (req, res) => {
       });
     }
 
+    // ================= DETERMINE SUBMISSION TYPE =================
+    const examExpired =
+      new Date(attempt.expires_at) <= new Date();
+
+    const submissionType =
+      examExpired || attempt.status === "expired"
+        ? "auto"
+        : requestedSubmissionType;
+
     // ================= GET QUESTIONS =================
     const questionsResult = await client.query(
       `SELECT
           id,
           type,
-          correct_option
+          correct_option,
+          marks,
+          negative_marks
        FROM questions
        WHERE exam_id=$1
        ORDER BY id`,
@@ -523,58 +534,90 @@ export const submitAttempt = async (req, res) => {
     });
 
     // ================= MCQ EVALUATION =================
-    let correctMcq = 0;
+    let mcqScore = 0;
+    let negativeScore = 0;
     let pendingQa = 0;
 
+    let correctMcq = 0;
+    let wrongMcq = 0;
+    let unansweredMcq = 0;
+
     questions.forEach((question) => {
+      // ================= MCQ =================
       if (question.type === "mcq") {
-        if (
-          answers[question.id] ===
-          question.correct_option
-        ) {
+        const answer = answers[question.id];
+
+        const isUnanswered =
+          answer === undefined ||
+          answer === null ||
+          String(answer).trim() === "";
+
+        // Unanswered = 0
+        if (isUnanswered) {
+          unansweredMcq++;
+          return;
+        }
+
+        // Correct answer
+        if (answer === question.correct_option) {
+          mcqScore += Number(question.marks);
           correctMcq++;
+        }
+
+        // Wrong answer
+        else {
+          negativeScore += Number(question.negative_marks);
+          wrongMcq++;
         }
       }
 
+      // ================= QA =================
       if (question.type === "qa") {
         pendingQa++;
       }
     });
 
+    // ================= FINAL MCQ SCORE =================
+    const finalMcqScore =
+      mcqScore - negativeScore;
+
     // ================= CREATE RESULT =================
-   const resultInsert = await client.query(
-  `INSERT INTO results (
-      user_id,
-      exam_id,
-      attempt_id,
-      score,
-      pending_qa,
-      qa_score,
-      total_score,
-      evaluated,
-      submitted_at
-   )
-   VALUES (
-      $1,
-      $2,
-      $3,
-      $4,
-      $5,
-      0,
-      $4,
-      $6,
-      NOW()
-   )
-   RETURNING id`,
-  [
-    userId,
-    attempt.exam_id,
-    attemptId,
-    correctMcq,
-    pendingQa,
-    pendingQa === 0,
-  ]
-);
+    const resultInsert = await client.query(
+      `INSERT INTO results (
+          user_id,
+          exam_id,
+          attempt_id,
+          score,
+          pending_qa,
+          qa_score,
+          total_score,
+          negative_score,
+          evaluated,
+          submitted_at
+       )
+       VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          0,
+          $4,
+          $6,
+          $7,
+          NOW()
+       )
+       RETURNING id`,
+      [
+        userId,
+        attempt.exam_id,
+        attemptId,
+        finalMcqScore,
+        pendingQa,
+        negativeScore,
+        pendingQa === 0,
+      ]
+    );
 
     const resultId = resultInsert.rows[0].id;
 
@@ -628,9 +671,14 @@ export const submitAttempt = async (req, res) => {
 
       result: {
         id: resultId,
-        score: correctMcq,
+        score: finalMcqScore,
+        mcq_score: mcqScore,
+        negative_score: negativeScore,
         pending_qa: pendingQa,
-        total_score: correctMcq,
+        total_score: finalMcqScore,
+        correct_mcq: correctMcq,
+        wrong_mcq: wrongMcq,
+        unanswered_mcq: unansweredMcq,
       },
 
       attempt: {
