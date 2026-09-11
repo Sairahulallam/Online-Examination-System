@@ -5,8 +5,8 @@ import {
   getCurrentAttempt,
   saveAnswer,
   getAttemptAnswers,
+  submitAttempt,
 } from "../controllers/attemptController.js";
-
 import protect from "../middleware/authMiddleware.js";
 
 const router = express.Router();
@@ -29,6 +29,11 @@ router.get(
   "/:attemptId/answers",
   protect,
   getAttemptAnswers
+);
+router.post(
+  "/:attemptId/submit",
+  protect,
+  submitAttempt
 );
 
 export default router;

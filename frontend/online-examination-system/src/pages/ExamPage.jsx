@@ -9,190 +9,320 @@ const ExamPage = () => {
 
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
+
   const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [reviewQuestions, setReviewQuestions] = useState([]);
+
   const [timeLeft, setTimeLeft] = useState(null);
   const [totalTime, setTotalTime] = useState(null);
-const [attemptId, setAttemptId] = useState(null);
-const [startedAt, setStartedAt] = useState("");
-const [expiresAt, setExpiresAt] = useState("");
-const [showConfirm, setShowConfirm] = useState(false);
+
+  const [attemptId, setAttemptId] = useState(null);
+  const [expiresAt, setExpiresAt] = useState("");
+
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const timerRef = useRef(null);
+  const hasSubmittedRef = useRef(false);
 
   // ================= LOAD EXAM =================
   useEffect(() => {
-   const loadExam = async () => {
-  try {
-    // ================= GET QUESTIONS =================
-    const qRes = await API.get(`/questions/${examId}`);
+    const loadExam = async () => {
+      try {
+        // ================= GET QUESTIONS =================
+        const qRes = await API.get(`/questions/${examId}`);
 
-    setQuestions(qRes.data);
+        setQuestions(qRes.data);
 
-    // ================= START / RESUME ATTEMPT =================
-    const attemptRes = await API.post("/attempts/start", {
-      exam_id: Number(examId),
-    });
+        // ================= START / RESUME ATTEMPT =================
+        const attemptRes = await API.post(
+          "/attempts/start",
+          {
+            exam_id: Number(examId),
+          }
+        );
 
-    const attempt = attemptRes.data.attempt;
+        const attempt = attemptRes.data.attempt;
 
-    setAttemptId(attempt.id);
-    setStartedAt(attempt.started_at);
-    setExpiresAt(attempt.expires_at);
+        setAttemptId(attempt.id);
+        setExpiresAt(attempt.expires_at);
 
-    // ================= SERVER TIMER =================
-    const expires = new Date(attempt.expires_at);
-    const now = new Date();
+        // ================= SERVER TIMER =================
+        const expires = new Date(attempt.expires_at);
+        const now = new Date();
 
-    const remainingSeconds = Math.max(
-      0,
-      Math.floor((expires - now) / 1000)
-    );
+        const remainingSeconds = Math.max(
+          0,
+          Math.floor((expires - now) / 1000)
+        );
 
-    setTimeLeft(remainingSeconds);
+        setTimeLeft(remainingSeconds);
 
-    // ================= TOTAL TIME =================
-    const eRes = await API.get("/exams");
+        // ================= GET EXAM =================
+        const eRes = await API.get("/exams");
 
-    const exam = eRes.data.find(
-      (e) => e.id == examId
-    );
+        const exam = eRes.data.find(
+          (e) => e.id == examId
+        );
 
-    if (!exam) {
-      toast.error("Exam not found");
-      return;
-    }
+        if (!exam) {
+          toast.error("Exam not found");
+          return;
+        }
 
-    const totalSeconds = Number(exam.duration) * 60;
+        const totalSeconds =
+          Number(exam.duration) * 60;
 
-    setTotalTime(totalSeconds);
+        setTotalTime(totalSeconds);
 
-    // ================= GET SERVER ANSWERS =================
-    try {
-      const answerRes = await API.get(
-        `/attempts/${attempt.id}/answers`
-      );
+        // ================= GET SERVER ANSWERS =================
+        try {
+          const answerRes = await API.get(
+            `/attempts/${attempt.id}/answers`
+          );
 
-      setAnswers(answerRes.data.answers || {});
-    } catch (error) {
-      console.error(
-        "Could not load server answers:",
-        error
-      );
+          setAnswers(
+            answerRes.data.answers || {}
+          );
+        } catch (error) {
+          console.error(
+            "Could not load server answers:",
+            error
+          );
 
-      // LocalStorage fallback
-      const saved = localStorage.getItem(
-        `exam_${examId}`
-      );
+          // ================= LOCAL STORAGE FALLBACK =================
+          const saved = localStorage.getItem(
+            `exam_${examId}`
+          );
 
-      if (saved) {
-        setAnswers(JSON.parse(saved));
+          if (saved) {
+            try {
+              setAnswers(JSON.parse(saved));
+            } catch (parseError) {
+              console.error(
+                "Invalid local answers:",
+                parseError
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.error(
+          "Error loading exam:",
+          error
+        );
+
+        toast.error(
+          error.response?.data?.message ||
+            "Unable to load exam"
+        );
       }
-    }
-  } catch (error) {
-    console.error("Error loading exam:", error);
+    };
 
-    toast.error(
-      error.response?.data?.message ||
-      "Unable to load exam"
-    );
-  }
-};
     loadExam();
   }, [examId]);
 
-  // ================= TIMER =================
+  // ================= SERVER BASED TIMER =================
   useEffect(() => {
-  if (timeLeft === null) return;
+    if (!expiresAt) return;
 
-  if (timeLeft === 60) {
-    toast("⚠ Only 1 minute remaining!");
-  }
+    const updateTimer = () => {
+      const now = new Date();
+      const expires = new Date(expiresAt);
 
-  if (timeLeft <= 0) {
-    clearTimeout(timerRef.current);
+      const remaining = Math.max(
+        0,
+        Math.floor((expires - now) / 1000)
+      );
 
-    if (!isSubmitting) {
-    setIsSubmitting(true);
-    submitExam();
-  }
+      setTimeLeft(remaining);
+    };
 
+    updateTimer();
 
-    return;
-  }
+    timerRef.current = setInterval(
+      updateTimer,
+      1000
+    );
 
-  timerRef.current = setTimeout(() => {
-    setTimeLeft((prev) => prev - 1);
-  }, 1000);
+    return () => {
+      clearInterval(timerRef.current);
+    };
+  }, [expiresAt]);
 
-  return () => clearTimeout(timerRef.current);
-}, [timeLeft, isSubmitting]);
-  // ================= AUTO SAVE =================
+  // ================= ONE MINUTE WARNING =================
   useEffect(() => {
-    localStorage.setItem(`exam_${examId}`, JSON.stringify(answers));
-  }, [answers, examId]);
+    if (timeLeft === 60) {
+      toast("⚠ Only 1 minute remaining!");
+    }
+  }, [timeLeft]);
+
+  // ================= AUTO SUBMIT =================
+  useEffect(() => {
+    if (
+      timeLeft === null ||
+      timeLeft > 0 ||
+      !attemptId ||
+      isSubmitting ||
+      hasSubmittedRef.current
+    ) {
+      return;
+    }
+
+    submitExam("auto");
+  }, [timeLeft, attemptId, isSubmitting]);
+
+  // ================= LOCAL STORAGE BACKUP =================
+  useEffect(() => {
+    if (
+      attemptId &&
+      !hasSubmittedRef.current
+    ) {
+      localStorage.setItem(
+        `exam_${examId}`,
+        JSON.stringify(answers)
+      );
+    }
+  }, [answers, examId, attemptId]);
 
   // ================= PREVENT REFRESH =================
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      e.preventDefault();
-      e.returnValue = "Exam in progress!";
+      if (
+        !hasSubmittedRef.current &&
+        attemptId
+      ) {
+        e.preventDefault();
+        e.returnValue =
+          "Exam in progress!";
+      }
     };
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener(
+      "beforeunload",
+      handleBeforeUnload
+    );
 
     return () =>
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, []);
+      window.removeEventListener(
+        "beforeunload",
+        handleBeforeUnload
+      );
+  }, [attemptId]);
 
   // ================= DISABLE BACK BUTTON =================
   useEffect(() => {
-    window.history.pushState(null, null, window.location.href);
+    if (!attemptId) return;
 
-    const handleBack = () => {
-      window.history.pushState(null, null, window.location.href);
-      toast.error("Back navigation disabled during exam");
-    };
-
-    window.addEventListener("popstate", handleBack);
-
-    return () => window.removeEventListener("popstate", handleBack);
-  }, []);
-
-  // ================= SUBMIT =================
-  const submitExam = async () => {
-
-  clearTimeout(timerRef.current);
-  localStorage.removeItem(`exam_${examId}`);
-
-  try {
-    console.log("Submitting Exam...");
-    await API.post("/results/submit", {
-      exam_id: Number(examId),
-      started_at: startedAt,
-      answers,
-    })
-    console.log("Submission Success");
-
-   toast.success("Exam Submitted Successfully!");
-
-setTimeout(() => {
-  navigate("/");
-}, 800);
-  } catch (err) {
-    console.log(err.response?.data);
-    console.error(err);
-
-    toast.error(
-      err.response?.data?.message || "Submission failed"
+    window.history.pushState(
+      null,
+      null,
+      window.location.href
     );
 
-    setIsSubmitting(false);
-  }
-};
+    const handleBack = () => {
+      window.history.pushState(
+        null,
+        null,
+        window.location.href
+      );
 
-  if (timeLeft === null) {
+      toast.error(
+        "Back navigation disabled during exam"
+      );
+    };
+
+    window.addEventListener(
+      "popstate",
+      handleBack
+    );
+
+    return () =>
+      window.removeEventListener(
+        "popstate",
+        handleBack
+      );
+  }, [attemptId]);
+
+  // ================= SUBMIT EXAM =================
+  const submitExam = async (
+    submissionType = "manual"
+  ) => {
+    if (
+      isSubmitting ||
+      hasSubmittedRef.current ||
+      !attemptId
+    ) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    hasSubmittedRef.current = true;
+
+    clearInterval(timerRef.current);
+
+    try {
+      console.log(
+        `Submitting exam: ${submissionType}`
+      );
+
+      const response = await API.post(
+        `/attempts/${attemptId}/submit`,
+        {
+          submission_type:
+            submissionType,
+        }
+      );
+
+      console.log(
+        "Submission success:",
+        response.data
+      );
+
+      // ================= REMOVE BACKUP ONLY AFTER SUCCESS =================
+      localStorage.removeItem(
+        `exam_${examId}`
+      );
+
+      if (submissionType === "auto") {
+        toast.success(
+          "Time's up! Exam submitted automatically."
+        );
+      } else {
+        toast.success(
+          "Exam submitted successfully!"
+        );
+      }
+
+      setShowConfirm(false);
+
+      setTimeout(() => {
+        navigate("/");
+      }, 1000);
+    } catch (error) {
+      console.error(
+        "Submission failed:",
+        error
+      );
+
+      // Allow retry if submission failed
+      hasSubmittedRef.current = false;
+
+      setIsSubmitting(false);
+
+      toast.error(
+        error.response?.data?.message ||
+          "Submission failed. Please try again."
+      );
+    }
+  };
+
+  // ================= LOADING =================
+  if (
+    timeLeft === null ||
+    !attemptId
+  ) {
     return (
       <div className="container mt-5 text-center">
         <h5>Loading Exam...</h5>
@@ -202,30 +332,70 @@ setTimeout(() => {
 
   const q = questions[currentQuestion];
 
+  // ================= REVIEW =================
   const toggleReview = () => {
     if (!q) return;
+
     if (reviewQuestions.includes(q.id)) {
-      setReviewQuestions(reviewQuestions.filter(id => id !== q.id));
+      setReviewQuestions(
+        reviewQuestions.filter(
+          (id) => id !== q.id
+        )
+      );
     } else {
-      setReviewQuestions([...reviewQuestions, q.id]);
+      setReviewQuestions([
+        ...reviewQuestions,
+        q.id,
+      ]);
     }
   };
 
+  // ================= ANSWER COUNT =================
+  const answeredCount = Object.keys(
+    answers
+  ).filter(
+    (key) =>
+      answers[key] !== "" &&
+      answers[key] !== null &&
+      answers[key] !== undefined
+  ).length;
+
+  const remainingCount =
+    questions.length - answeredCount;
+
+  // ================= UI =================
   return (
     <div className="container mt-4">
 
-      {/* FULLSCREEN */}
+      {/* FULLSCREEN + TIMER */}
       <div className="d-flex justify-content-between mb-3">
+
         <button
           className="btn btn-dark"
-          onClick={() => document.documentElement.requestFullscreen()}
+          onClick={() => {
+            if (
+              document.documentElement.requestFullscreen
+            ) {
+              document.documentElement.requestFullscreen();
+            }
+          }}
         >
           Enter Fullscreen
         </button>
 
-        <h5 style={{ color: "red" }}>
-          ⏳ {Math.floor(timeLeft / 60)}:
-          {String(timeLeft % 60).padStart(2, "0")}
+        <h5
+          style={{
+            color:
+              timeLeft <= 60
+                ? "red"
+                : "inherit",
+          }}
+        >
+          ⏳{" "}
+          {Math.floor(timeLeft / 60)}:
+          {String(
+            timeLeft % 60
+          ).padStart(2, "0")}
         </h5>
       </div>
 
@@ -234,182 +404,277 @@ setTimeout(() => {
         <div
           className="progress-bar bg-success"
           style={{
-            width: `${(timeLeft / totalTime) * 100}%`,
-            transition: "width 1s linear",
+            width: `${
+              totalTime
+                ? Math.max(
+                    0,
+                    Math.min(
+                      100,
+                      (timeLeft /
+                        totalTime) *
+                        100
+                    )
+                  )
+                : 0
+            }%`,
+            transition:
+              "width 1s linear",
           }}
-        ></div>
+        />
       </div>
 
       {/* EXAM HEADER */}
       <div className="d-flex justify-content-between align-items-center mb-3">
-        <h5>Online Examination</h5>
+        <h5>
+          Online Examination
+        </h5>
 
         <span className="badge bg-primary fs-6">
-          Attempted: {Object.keys(answers).length}/{questions.length}
+          Answered:{" "}
+          {answeredCount}/
+          {questions.length}
         </span>
       </div>
 
       {/* LEGEND */}
       <div className="mb-3">
-        <span className="badge bg-success me-2">Answered</span>
-        <span className="badge bg-warning me-2">Review</span>
-        <span className="badge bg-secondary">Not Answered</span>
+        <span className="badge bg-success me-2">
+          Answered
+        </span>
+
+        <span className="badge bg-warning me-2">
+          Review
+        </span>
+
+        <span className="badge bg-secondary">
+          Not Answered
+        </span>
       </div>
 
       {/* QUESTION NAVIGATOR */}
       <div className="card p-3 mb-3">
-        <h5>Question Navigator</h5>
+        <h5>
+          Question Navigator
+        </h5>
+
         <div className="d-flex flex-wrap gap-2">
-          {questions.map((question, index) => (
-            <button
-              key={question.id}
-              className={`btn ${
-                reviewQuestions.includes(question.id)
-                  ? "btn-warning"
-                  : answers[question.id]
-                  ? "btn-success"
-                  : "btn-outline-secondary"
-              }`}
-              onClick={() => setCurrentQuestion(index)}
-            >
-              {index + 1}
-              {currentQuestion === index && " ★"}
-            </button>
-          ))}
+
+          {questions.map(
+            (question, index) => (
+              <button
+                key={question.id}
+                className={`btn ${
+                  reviewQuestions.includes(
+                    question.id
+                  )
+                    ? "btn-warning"
+                    : answers[
+                        question.id
+                      ]
+                    ? "btn-success"
+                    : "btn-outline-secondary"
+                }`}
+                onClick={() =>
+                  setCurrentQuestion(index)
+                }
+              >
+                {index + 1}
+
+                {currentQuestion ===
+                  index && " ★"}
+              </button>
+            )
+          )}
+
         </div>
       </div>
 
       {/* CURRENT QUESTION */}
       {q && (
         <div className="card p-4">
+
           <h5>
-            Question {currentQuestion + 1} of {questions.length}
+            Question{" "}
+            {currentQuestion + 1} of{" "}
+            {questions.length}
           </h5>
 
           <div className="mb-3">
-            {reviewQuestions.includes(q.id) ? (
+
+            {reviewQuestions.includes(
+              q.id
+            ) ? (
               <span className="badge bg-warning text-dark">
                 Marked for Review
               </span>
             ) : answers[q.id] ? (
-              <span className="badge bg-success">Answered</span>
+              <span className="badge bg-success">
+                Answered
+              </span>
             ) : (
-              <span className="badge bg-secondary">Not Answered</span>
+              <span className="badge bg-secondary">
+                Not Answered
+              </span>
             )}
+
           </div>
 
           <p>{q.question}</p>
 
+          {/* MCQ */}
           {q.type === "mcq" ? (
-            ["A", "B", "C", "D"].map(opt => (
-              <div key={opt} className="form-check">
-                <input
-                  type="radio"
-                  className="form-check-input"
-                  name={q.id}
-                  checked={answers[q.id] === opt}
-                  onChange={async () => {
-  const updatedAnswers = {
-    ...answers,
-    [q.id]: opt,
-  };
+            ["A", "B", "C", "D"].map(
+              (opt) => (
+                <div
+                  key={opt}
+                  className="form-check"
+                >
+                  <input
+                    type="radio"
+                    className="form-check-input"
+                    name={q.id}
+                    checked={
+                      answers[q.id] ===
+                      opt
+                    }
+                    onChange={async () => {
 
-  setAnswers(updatedAnswers);
+                      const updatedAnswers =
+                        {
+                          ...answers,
+                          [q.id]: opt,
+                        };
 
-  if (attemptId) {
-    try {
-      await API.put(
-        `/attempts/${attemptId}/answers/${q.id}`,
-        {
-          answer: opt,
-        }
-      );
-    } catch (error) {
-      console.error(
-        "Failed to save answer:",
-        error
-      );
-    }
-  }
-}}
-                />
-                <label className="form-check-label">
-                  {q[`option_${opt.toLowerCase()}`]}
-                </label>
-              </div>
-            ))
+                      setAnswers(
+                        updatedAnswers
+                      );
+
+                      if (attemptId) {
+                        try {
+                          await API.put(
+                            `/attempts/${attemptId}/answers/${q.id}`,
+                            {
+                              answer:
+                                opt,
+                            }
+                          );
+                        } catch (error) {
+                          console.error(
+                            "Failed to save answer:",
+                            error
+                          );
+
+                          toast.error(
+                            "Answer could not be saved"
+                          );
+                        }
+                      }
+                    }}
+                  />
+
+                  <label className="form-check-label">
+                    {
+                      q[
+                        `option_${opt.toLowerCase()}`
+                      ]
+                    }
+                  </label>
+                </div>
+              )
+            )
           ) : (
+            /* QA */
             <textarea
               className="form-control"
               rows="5"
               placeholder="Write your answer..."
-              value={answers[q.id] || ""}
+              value={
+                answers[q.id] || ""
+              }
               onChange={async (e) => {
-  const value = e.target.value;
 
-  const updatedAnswers = {
-    ...answers,
-    [q.id]: value,
-  };
+                const value =
+                  e.target.value;
 
-  setAnswers(updatedAnswers);
+                const updatedAnswers =
+                  {
+                    ...answers,
+                    [q.id]: value,
+                  };
 
-  if (attemptId) {
-    try {
-      await API.put(
-        `/attempts/${attemptId}/answers/${q.id}`,
-        {
-          answer: value,
-        }
-      );
-    } catch (error) {
-      console.error(
-        "Failed to save answer:",
-        error
-      );
-    }
-  }
-}}
+                setAnswers(
+                  updatedAnswers
+                );
+
+                if (attemptId) {
+                  try {
+                    await API.put(
+                      `/attempts/${attemptId}/answers/${q.id}`,
+                      {
+                        answer:
+                          value,
+                      }
+                    );
+                  } catch (error) {
+                    console.error(
+                      "Failed to save answer:",
+                      error
+                    );
+                  }
+                }
+              }}
             />
           )}
 
+          {/* CLEAR */}
           <button
             className="btn btn-outline-danger mt-3"
-           onClick={async () => {
-  const updated = { ...answers };
+            onClick={async () => {
 
-  delete updated[q.id];
+              const updated = {
+                ...answers,
+              };
 
-  setAnswers(updated);
+              delete updated[q.id];
 
-  if (attemptId) {
-    try {
-      await API.put(
-        `/attempts/${attemptId}/answers/${q.id}`,
-        {
-          answer: "",
-        }
-      );
-    } catch (error) {
-      console.error(
-        "Failed to clear answer:",
-        error
-      );
-    }
-  }
-}}
+              setAnswers(updated);
+
+              if (attemptId) {
+                try {
+                  await API.put(
+                    `/attempts/${attemptId}/answers/${q.id}`,
+                    {
+                      answer: "",
+                    }
+                  );
+                } catch (error) {
+                  console.error(
+                    "Failed to clear answer:",
+                    error
+                  );
+                }
+              }
+            }}
           >
             Clear Response
           </button>
+
         </div>
       )}
 
-      {/* PREV / REVIEW / NEXT */}
+      {/* PREVIOUS / REVIEW / NEXT */}
       <div className="d-flex justify-content-between mt-4">
+
         <button
           className="btn btn-secondary"
-          disabled={currentQuestion === 0}
-          onClick={() => setCurrentQuestion(currentQuestion - 1)}
+          disabled={
+            currentQuestion === 0
+          }
+          onClick={() =>
+            setCurrentQuestion(
+              currentQuestion - 1
+            )
+          }
         >
           Previous
         </button>
@@ -418,68 +683,120 @@ setTimeout(() => {
           className="btn btn-warning"
           onClick={toggleReview}
         >
-          {q && reviewQuestions.includes(q.id)
+          {q &&
+          reviewQuestions.includes(
+            q.id
+          )
             ? "Remove Review"
             : "Mark Review"}
         </button>
 
         <button
           className="btn btn-primary"
-          disabled={currentQuestion === questions.length - 1}
-          onClick={() => setCurrentQuestion(currentQuestion + 1)}
+          disabled={
+            currentQuestion ===
+            questions.length - 1
+          }
+          onClick={() =>
+            setCurrentQuestion(
+              currentQuestion + 1
+            )
+          }
         >
           Next
         </button>
+
       </div>
 
       {/* SUMMARY */}
       <div className="alert alert-info mt-4">
-        Answered :
-        <strong> {Object.keys(answers).length}</strong>
-        <br />
-        Remaining :
+
+        Answered:
         <strong>
-          {" "}{questions.length - Object.keys(answers).length}
+          {" "}
+          {answeredCount}
         </strong>
+
+        <br />
+
+        Remaining:
+        <strong>
+          {" "}
+          {remainingCount}
+        </strong>
+
       </div>
 
       {/* SUBMIT */}
       <button
         className="btn btn-success w-100 mt-3"
-        onClick={() => setShowConfirm(true)}
+        disabled={isSubmitting}
+        onClick={() =>
+          setShowConfirm(true)
+        }
       >
-        Submit Exam
+        {isSubmitting
+          ? "Submitting..."
+          : "Submit Exam"}
       </button>
 
       {/* CONFIRM MODAL */}
       {showConfirm && (
         <div className="modal-overlay">
+
           <div className="modal-box">
-            <h5>Submit Exam?</h5>
+
+            <h5>
+              Submit Exam?
+            </h5>
+
             <p>
-              Answered :
-              <strong> {Object.keys(answers).length}</strong>
-              <br />
-              Remaining :
+              Answered:
               <strong>
-                {" "}{questions.length - Object.keys(answers).length}
+                {" "}
+                {answeredCount}
+              </strong>
+
+              <br />
+
+              Remaining:
+              <strong>
+                {" "}
+                {remainingCount}
               </strong>
             </p>
+
             <button
               className="btn btn-danger me-2"
-              onClick={submitExam}
+              disabled={
+                isSubmitting
+              }
+              onClick={() =>
+                submitExam("manual")
+              }
             >
-              Yes Submit
+              {isSubmitting
+                ? "Submitting..."
+                : "Yes Submit"}
             </button>
+
             <button
               className="btn btn-secondary"
-              onClick={() => setShowConfirm(false)}
+              disabled={
+                isSubmitting
+              }
+              onClick={() =>
+                setShowConfirm(false)
+              }
             >
               Cancel
             </button>
+
           </div>
+
         </div>
       )}
+
     </div>
   );
 };

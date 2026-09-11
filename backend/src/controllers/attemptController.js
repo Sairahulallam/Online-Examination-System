@@ -428,3 +428,230 @@ export const getAttemptAnswers = async (req, res) => {
     });
   }
 };
+/* =========================
+   SUBMIT EXAM ATTEMPT
+========================= */
+export const submitAttempt = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const userId = req.user.id;
+    const attemptId = Number(req.params.attemptId);
+
+    const submissionType =
+      req.body.submission_type === "auto"
+        ? "auto"
+        : "manual";
+
+    if (!Number.isInteger(attemptId)) {
+      return res.status(400).json({
+        message: "Invalid attempt ID",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // ================= GET ATTEMPT =================
+    const attemptResult = await client.query(
+      `SELECT
+          id,
+          user_id,
+          exam_id,
+          attempt_number,
+          status,
+          started_at,
+          expires_at,
+          submitted_at
+       FROM attempts
+       WHERE id=$1
+         AND user_id=$2
+       FOR UPDATE`,
+      [attemptId, userId]
+    );
+
+    if (attemptResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        message: "Exam attempt not found",
+      });
+    }
+
+    const attempt = attemptResult.rows[0];
+
+    // ================= ALREADY SUBMITTED =================
+    if (
+      attempt.status === "submitted" ||
+      attempt.status === "auto_submitted"
+    ) {
+      await client.query("ROLLBACK");
+
+      return res.status(200).json({
+        message: "Exam already submitted",
+        alreadySubmitted: true,
+      });
+    }
+
+    // ================= GET QUESTIONS =================
+    const questionsResult = await client.query(
+      `SELECT
+          id,
+          type,
+          correct_option
+       FROM questions
+       WHERE exam_id=$1
+       ORDER BY id`,
+      [attempt.exam_id]
+    );
+
+    const questions = questionsResult.rows;
+
+    // ================= GET SAVED ANSWERS =================
+    const answersResult = await client.query(
+      `SELECT
+          question_id,
+          answer
+       FROM attempt_answers
+       WHERE attempt_id=$1`,
+      [attemptId]
+    );
+
+    const answers = {};
+
+    answersResult.rows.forEach((row) => {
+      answers[row.question_id] = row.answer;
+    });
+
+    // ================= MCQ EVALUATION =================
+    let correctMcq = 0;
+    let pendingQa = 0;
+
+    questions.forEach((question) => {
+      if (question.type === "mcq") {
+        if (
+          answers[question.id] ===
+          question.correct_option
+        ) {
+          correctMcq++;
+        }
+      }
+
+      if (question.type === "qa") {
+        pendingQa++;
+      }
+    });
+
+    // ================= CREATE RESULT =================
+   const resultInsert = await client.query(
+  `INSERT INTO results (
+      user_id,
+      exam_id,
+      attempt_id,
+      score,
+      pending_qa,
+      qa_score,
+      total_score,
+      evaluated,
+      submitted_at
+   )
+   VALUES (
+      $1,
+      $2,
+      $3,
+      $4,
+      $5,
+      0,
+      $4,
+      $6,
+      NOW()
+   )
+   RETURNING id`,
+  [
+    userId,
+    attempt.exam_id,
+    attemptId,
+    correctMcq,
+    pendingQa,
+    pendingQa === 0,
+  ]
+);
+
+    const resultId = resultInsert.rows[0].id;
+
+    // ================= STORE QA ANSWERS =================
+    for (const question of questions) {
+      if (question.type === "qa") {
+        await client.query(
+          `INSERT INTO qa_answers (
+              result_id,
+              question_id,
+              answer
+           )
+           VALUES ($1,$2,$3)`,
+          [
+            resultId,
+            question.id,
+            answers[question.id] || "",
+          ]
+        );
+      }
+    }
+
+    // ================= UPDATE ATTEMPT =================
+    const finalStatus =
+      submissionType === "auto"
+        ? "auto_submitted"
+        : "submitted";
+
+    await client.query(
+      `UPDATE attempts
+       SET
+         status=$1,
+         submission_type=$2,
+         submitted_at=NOW(),
+         last_saved_at=COALESCE(last_saved_at, NOW())
+       WHERE id=$3`,
+      [
+        finalStatus,
+        submissionType,
+        attemptId,
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(201).json({
+      message:
+        submissionType === "auto"
+          ? "Exam auto-submitted successfully"
+          : "Exam submitted successfully",
+
+      result: {
+        id: resultId,
+        score: correctMcq,
+        pending_qa: pendingQa,
+        total_score: correctMcq,
+      },
+
+      attempt: {
+        id: attemptId,
+        status: finalStatus,
+        submission_type: submissionType,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+
+    console.error(
+      "Submit attempt error:",
+      error
+    );
+
+    return res.status(500).json({
+      message:
+        "Server error while submitting exam",
+    });
+  } finally {
+    client.release();
+  }
+};

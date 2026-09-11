@@ -152,6 +152,8 @@ export const getMyResults = async (req, res) => {
 
     const result = await pool.query(
   `SELECT
+      results.id AS result_id,
+      results.attempt_id,
       exams.id AS exam_id,
       exams.title,
 
@@ -229,7 +231,7 @@ export const getAllResults = async (req, res) => {
     const result = await pool.query(`
       SELECT 
         results.id,
-
+        results.attempt_id,
         users.name AS student_name,
 
         exams.title AS exam_title,
