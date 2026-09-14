@@ -7,7 +7,6 @@ export const startAttempt = async (req, res) => {
   try {
     const userId = req.user.id;
     const { exam_id } = req.body;
-
     // ================= VALIDATE EXAM ID =================
     if (!exam_id) {
       return res.status(400).json({
@@ -17,14 +16,18 @@ export const startAttempt = async (req, res) => {
 
     // ================= GET EXAM =================
     const examResult = await pool.query(
-      `SELECT
-          id,
-          title,
-          duration
-       FROM exams
-       WHERE id=$1`,
-      [exam_id]
-    );
+  `SELECT
+      id,
+      title,
+      duration,
+      max_attempts,
+      status,
+      starts_at,
+      ends_at
+   FROM exams
+   WHERE id=$1`,
+  [exam_id]
+);
 
     if (examResult.rows.length === 0) {
       return res.status(404).json({
@@ -33,7 +36,31 @@ export const startAttempt = async (req, res) => {
     }
 
     const exam = examResult.rows[0];
+    
+  if (exam.status !== "published") {
+  return res.status(403).json({
+    message: "This exam is not currently available",
+  });
+}
+const now = new Date();
 
+if (
+  exam.starts_at &&
+  new Date(exam.starts_at) > now
+) {
+  return res.status(403).json({
+    message: "This exam has not started yet",
+  });
+}
+
+if (
+  exam.ends_at &&
+  new Date(exam.ends_at) <= now
+) {
+  return res.status(403).json({
+    message: "This exam is closed",
+  });
+}
     const duration = Number(exam.duration);
 
     if (!Number.isFinite(duration) || duration <= 0) {
@@ -90,6 +117,26 @@ export const startAttempt = async (req, res) => {
         });
       }
     }
+    const attemptCountResult = await pool.query(
+  `SELECT COUNT(*) AS count
+   FROM attempts
+   WHERE user_id=$1
+     AND exam_id=$2
+     AND status IN (
+       'submitted',
+       'auto_submitted'
+     )`,
+  [userId, exam_id]
+);
+
+const completedAttempts =
+  Number(attemptCountResult.rows[0].count);
+
+if (completedAttempts >= Number(exam.max_attempts)) {
+  return res.status(403).json({
+    message: "Maximum attempts reached for this exam",
+  });
+}
 
     // ================= GET NEXT ATTEMPT NUMBER =================
     const attemptNumberResult = await pool.query(
@@ -492,10 +539,39 @@ export const submitAttempt = async (req, res) => {
       });
     }
 
-    // ================= DETERMINE SUBMISSION TYPE =================
-    const examExpired =
-      new Date(attempt.expires_at) <= new Date();
+    // ================= GET EXAM CONFIG =================
+    const examResult = await client.query(
+      `SELECT
+          id,
+          title,
+          duration,
+          passing_marks,
+          show_result_immediately
+       FROM exams
+       WHERE id=$1`,
+      [attempt.exam_id]
+    );
 
+    if (examResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        message: "Exam not found",
+      });
+    }
+
+    const exam = examResult.rows[0];
+
+    // ================= DETERMINE EXPIRY =================
+    const now = new Date();
+
+    const examExpired =
+      new Date(attempt.expires_at) <= now;
+
+    /*
+      If the server determines that the exam has expired,
+      submission is always treated as automatic.
+    */
     const submissionType =
       examExpired || attempt.status === "expired"
         ? "auto"
@@ -533,55 +609,132 @@ export const submitAttempt = async (req, res) => {
       answers[row.question_id] = row.answer;
     });
 
-    // ================= MCQ EVALUATION =================
+    // ================= SCORE VARIABLES =================
+
     let mcqScore = 0;
     let negativeScore = 0;
+
     let pendingQa = 0;
 
-    let correctMcq = 0;
-    let wrongMcq = 0;
-    let unansweredMcq = 0;
+    let correctCount = 0;
+    let wrongCount = 0;
+    let unansweredCount = 0;
+
+    let totalPossibleMarks = 0;
+
+    // ================= EVALUATE QUESTIONS =================
 
     questions.forEach((question) => {
+      const marks = Number(question.marks) || 0;
+      const negativeMarks =
+        Number(question.negative_marks) || 0;
+
+      // Every question contributes its marks
+      // to the maximum possible score.
+      totalPossibleMarks += marks;
+
+      const answer = answers[question.id];
+
+      const isUnanswered =
+        answer === undefined ||
+        answer === null ||
+        String(answer).trim() === "";
+
+      // ================= UNANSWERED =================
+
+      if (isUnanswered) {
+        unansweredCount++;
+
+        // QA unanswered questions are still pending
+        // because they need to be evaluated.
+        if (question.type === "qa") {
+          pendingQa++;
+        }
+
+        return;
+      }
+
       // ================= MCQ =================
+
       if (question.type === "mcq") {
-        const answer = answers[question.id];
-
-        const isUnanswered =
-          answer === undefined ||
-          answer === null ||
-          String(answer).trim() === "";
-
-        // Unanswered = 0
-        if (isUnanswered) {
-          unansweredMcq++;
-          return;
+        // Correct
+        if (
+          String(answer).trim() ===
+          String(question.correct_option).trim()
+        ) {
+          mcqScore += marks;
+          correctCount++;
         }
 
-        // Correct answer
-        if (answer === question.correct_option) {
-          mcqScore += Number(question.marks);
-          correctMcq++;
-        }
-
-        // Wrong answer
+        // Wrong
         else {
-          negativeScore += Number(question.negative_marks);
-          wrongMcq++;
+          negativeScore += negativeMarks;
+          wrongCount++;
         }
       }
 
       // ================= QA =================
+
       if (question.type === "qa") {
         pendingQa++;
       }
     });
 
     // ================= FINAL MCQ SCORE =================
+
     const finalMcqScore =
       mcqScore - negativeScore;
 
-    // ================= CREATE RESULT =================
+    // ================= TIME TAKEN =================
+
+    const startedAt = new Date(attempt.started_at);
+
+    const elapsedSeconds = Math.max(
+      0,
+      Math.floor(
+        (now.getTime() - startedAt.getTime()) / 1000
+      )
+    );
+
+    const examDurationSeconds =
+      Number(exam.duration) * 60;
+
+    const timeTakenSeconds = Math.min(
+      elapsedSeconds,
+      examDurationSeconds
+    );
+
+    // ================= INITIAL RESULT STATUS =================
+
+    let resultStatus = "pending";
+
+    let evaluated = false;
+
+    let percentage = null;
+
+    /*
+      If there are NO QA questions,
+      the result can be completely evaluated
+      immediately.
+    */
+    if (pendingQa === 0) {
+      evaluated = true;
+
+      if (totalPossibleMarks > 0) {
+        percentage =
+          (finalMcqScore / totalPossibleMarks) * 100;
+      }
+
+      if (exam.passing_marks !== null) {
+        resultStatus =
+          finalMcqScore >= Number(exam.passing_marks)
+            ? "passed"
+            : "failed";
+      }
+    }
+
+    // ================= INSERT RESULT =================
+
     const resultInsert = await client.query(
       `INSERT INTO results (
           user_id,
@@ -592,6 +745,13 @@ export const submitAttempt = async (req, res) => {
           qa_score,
           total_score,
           negative_score,
+          total_possible_marks,
+          correct_count,
+          wrong_count,
+          unanswered_count,
+          percentage,
+          result_status,
+          time_taken_seconds,
           evaluated,
           submitted_at
        )
@@ -601,10 +761,17 @@ export const submitAttempt = async (req, res) => {
           $3,
           $4,
           $5,
-          0,
-          $4,
           $6,
           $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
           NOW()
        )
        RETURNING id`,
@@ -612,35 +779,62 @@ export const submitAttempt = async (req, res) => {
         userId,
         attempt.exam_id,
         attemptId,
+
+        // MCQ score after negative marking
         finalMcqScore,
+
+        // QA still pending?
         pendingQa,
+
+        // QA score starts at 0
+        0,
+
+        // Initial total = MCQ score
+        finalMcqScore,
+
+        // Negative marks
         negativeScore,
-        pendingQa === 0,
+
+        // Maximum possible marks
+        totalPossibleMarks,
+
+        correctCount,
+        wrongCount,
+        unansweredCount,
+
+        percentage,
+        resultStatus,
+        timeTakenSeconds,
+        evaluated,
       ]
     );
 
     const resultId = resultInsert.rows[0].id;
 
     // ================= STORE QA ANSWERS =================
+
     for (const question of questions) {
-      if (question.type === "qa") {
-        await client.query(
-          `INSERT INTO qa_answers (
-              result_id,
-              question_id,
-              answer
-           )
-           VALUES ($1,$2,$3)`,
-          [
-            resultId,
-            question.id,
-            answers[question.id] || "",
-          ]
-        );
+      if (question.type !== "qa") {
+        continue;
       }
+
+      await client.query(
+        `INSERT INTO qa_answers (
+            result_id,
+            question_id,
+            answer
+         )
+         VALUES ($1,$2,$3)`,
+        [
+          resultId,
+          question.id,
+          answers[question.id] || "",
+        ]
+      );
     }
 
     // ================= UPDATE ATTEMPT =================
+
     const finalStatus =
       submissionType === "auto"
         ? "auto_submitted"
@@ -663,6 +857,8 @@ export const submitAttempt = async (req, res) => {
 
     await client.query("COMMIT");
 
+    // ================= RESPONSE =================
+
     return res.status(201).json({
       message:
         submissionType === "auto"
@@ -671,19 +867,44 @@ export const submitAttempt = async (req, res) => {
 
       result: {
         id: resultId,
+
         score: finalMcqScore,
+
         mcq_score: mcqScore,
+
         negative_score: negativeScore,
-        pending_qa: pendingQa,
+
+        qa_score: 0,
+
         total_score: finalMcqScore,
-        correct_mcq: correctMcq,
-        wrong_mcq: wrongMcq,
-        unanswered_mcq: unansweredMcq,
+
+        total_possible_marks:
+          totalPossibleMarks,
+
+        correct_count: correctCount,
+
+        wrong_count: wrongCount,
+
+        unanswered_count:
+          unansweredCount,
+
+        pending_qa: pendingQa,
+
+        percentage,
+
+        result_status: resultStatus,
+
+        evaluated,
+
+        time_taken_seconds:
+          timeTakenSeconds,
       },
 
       attempt: {
         id: attemptId,
+
         status: finalStatus,
+
         submission_type: submissionType,
       },
     });
@@ -694,6 +915,14 @@ export const submitAttempt = async (req, res) => {
       "Submit attempt error:",
       error
     );
+
+    // Duplicate attempt_id protection
+    if (error.code === "23505") {
+      return res.status(409).json({
+        message:
+          "This exam attempt has already been submitted",
+      });
+    }
 
     return res.status(500).json({
       message:
