@@ -6,7 +6,6 @@ import {
   saveAnswer,
   getAttemptAnswers,
   submitAttempt,
-  getExamAvailability
 } from "../controllers/attemptController.js";
 import protect from "../middleware/authMiddleware.js";
 
@@ -36,5 +35,4 @@ router.post(
   protect,
   submitAttempt
 );
-router.get("/availability/:examId", protect, getExamAvailability);
 export default router;
